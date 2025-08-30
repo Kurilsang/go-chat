@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Go Chat 测试页面</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 10px 0;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        .connected { background: #d4edda; color: #155724; }
+        .disconnected { background: #f8d7da; color: #721c24; }
+        input, button {
+            padding: 8px 12px;
+            margin: 5px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            cursor: pointer;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        #messages {
+            height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            background: #f9f9f9;
+        }
+        .message {
+            margin: 5px 0;
+            padding: 8px;
+            border-radius: 4px;
+        }
+        .message-sent {
+            background: #e3f2fd;
+            text-align: right;
+        }
+        .message-received {
+            background: #f0f0f0;
+        }
+        .message-system {
+            background: #fff3cd;
+            text-align: center;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <h1>Go Chat WebSocket 测试</h1>
+    
+    <div class="container">
+        <h3>连接控制</h3>
+        <div>
+            <label>用户ID: <input type="number" id="user-id" placeholder="输入用户ID" /></label>
+            <label>用户名: <input type="text" id="username" placeholder="输入用户名" /></label>
+            <button id="connect-btn" onclick="connect()">连接</button>
+            <button id="disconnect-btn" onclick="disconnect()" disabled>断开</button>
+        </div>
+        <div id="status" class="status disconnected">未连接</div>
+    </div>
+
+    <div class="container">
+        <h3>聊天区域</h3>
+        <div id="messages"></div>
+    </div>
+
+    <div class="container">
+        <h3>发送消息</h3>
+        <div>
+            <label>目标用户ID: <input type="number" id="target-user" placeholder="输入目标用户ID" /></label>
+            <label>消息内容: <input type="text" id="message-input" placeholder="输入消息..." disabled /></label>
+            <button id="send-btn" onclick="sendMessage()" disabled>发送</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <h3>在线用户</h3>
+        <div id="online-users">未连接</div>
+    </div>
+
+    <script>
+        let ws = null;
+        let isConnected = false;
+        let userID = null;
+        let username = null;
+
+        function connect() {
+            // 强制清理现有连接
+            if (ws) {
+                console.log('清理现有连接，当前状态:', ws.readyState);
+                if (ws.readyState === WebSocket.CONNECTING) {
+                    console.log('正在连接中，等待并关闭');
+                }
+                if (ws.readyState === WebSocket.OPEN) {
+                    console.log('连接已开启，关闭中');
+                }
+                ws.close(1000, '新连接替换');
+                ws = null;
+            }
+            
+            // 重置连接状态
+            isConnected = false;
+            updateUI();
+
+            userID = document.getElementById('user-id').value;
+            username = document.getElementById('username').value;
+
+            if (!userID || !username) {
+                alert('请输入用户ID和用户名');
+                return;
+            }
+
+            const wsUrl = `ws://localhost:8081/ws?user_id=${userID}&username=${encodeURIComponent(username)}`;
+            console.log('=== 开始新的WebSocket连接 ===');
+            console.log('连接URL:', wsUrl);
+            console.log('用户ID:', userID, '用户名:', username);
+            
+            // 先更新UI状态为连接中
+            addSystemMessage('正在连接到服务器...');
+            
+            try {
+                ws = new WebSocket(wsUrl);
+                
+                // 设置连接超时
+                const connectTimeout = setTimeout(() => {
+                    if (ws.readyState === WebSocket.CONNECTING) {
+                        console.log('连接超时');
+                        ws.close();
+                        addSystemMessage('连接超时，请重试');
+                    }
+                }, 5000);
+                
+                ws.onopen = function(event) {
+                    clearTimeout(connectTimeout);
+                    console.log('✅ WebSocket.onopen 触发');
+                    console.log('连接已建立，readyState:', ws.readyState);
+                    console.log('事件详情:', event);
+                    isConnected = true;
+                    updateUI();
+                    addSystemMessage('已连接到聊天服务器');
+                };
+                
+                ws.onmessage = function(event) {
+                    console.log('收到消息:', event.data);
+                    try {
+                        const message = JSON.parse(event.data);
+                        handleMessage(message);
+                    } catch (error) {
+                        console.error('消息解析失败:', error);
+                        addSystemMessage('收到无效消息: ' + event.data);
+                    }
+                };
+                
+                ws.onclose = function(event) {
+                    clearTimeout(connectTimeout);
+                    console.log('WebSocket连接已断开', event.code, event.reason);
+                    isConnected = false;
+                    updateUI();
+                    
+                    if (event.code === 1000) {
+                        addSystemMessage('正常断开连接');
+                    } else {
+                        addSystemMessage(`连接断开 (代码: ${event.code}, 原因: ${event.reason || '未知'})`);
+                    }
+                };
+                
+                ws.onerror = function(error) {
+                    clearTimeout(connectTimeout);
+                    console.error('WebSocket错误:', error);
+                    isConnected = false;
+                    updateUI();
+                    addSystemMessage('WebSocket连接错误');
+                };
+                
+            } catch (error) {
+                console.error('WebSocket连接失败:', error);
+                addSystemMessage('连接失败: ' + error.message);
+                isConnected = false;
+                updateUI();
+            }
+        }
+
+        function disconnect() {
+            if (ws) {
+                console.log('主动断开连接');
+                ws.close(1000, '用户主动断开');
+                ws = null;
+                isConnected = false;
+                updateUI();
+                addSystemMessage('已断开连接');
+            }
+        }
+
+        function sendMessage() {
+            if (!isConnected) {
+                alert('请先连接到服务器');
+                return;
+            }
+
+            const messageInput = document.getElementById('message-input');
+            const targetUserInput = document.getElementById('target-user');
+            
+            const content = messageInput.value.trim();
+            const targetUserID = parseInt(targetUserInput.value);
+
+            if (!content) {
+                alert('请输入消息内容');
+                return;
+            }
+
+            if (!targetUserID) {
+                alert('请输入目标用户ID');
+                return;
+            }
+
+            const message = {
+                type: 'private',
+                to_user_id: targetUserID,
+                content: content,
+                timestamp: new Date().toISOString()
+            };
+
+            try {
+                ws.send(JSON.stringify(message));
+                
+                // 添加到消息列表
+                addMessage({
+                    from: parseInt(userID),
+                    content: content,
+                    timestamp: new Date().toISOString(),
+                    type: 'sent'
+                });
+                
+                // 清空输入框
+                messageInput.value = '';
+                
+            } catch (error) {
+                console.error('发送消息失败:', error);
+                alert('发送消息失败');
+            }
+        }
+
+        function handleMessage(message) {
+            switch (message.type) {
+                case 'private':
+                    addMessage({
+                        from: message.from_user_id,
+                        content: message.content,
+                        timestamp: message.timestamp,
+                        type: 'received'
+                    });
+                    break;
+                case 'user_list':
+                    updateOnlineUsers(message.data.users);
+                    break;
+                case 'join':
+                    addSystemMessage(`${message.data.username} 加入了聊天`);
+                    break;
+                case 'leave':
+                    addSystemMessage(`${message.data.username} 离开了聊天`);
+                    break;
+                case 'error':
+                    addSystemMessage(`错误: ${message.data.message}`);
+                    break;
+                case 'heartbeat':
+                    // 心跳响应，不需要处理
+                    break;
+                case 'read':
+                    console.log('消息已送达');
+                    break;
+                default:
+                    console.log('未知消息类型:', message.type);
+            }
+        }
+
+        function addMessage(messageData) {
+            const messagesContainer = document.getElementById('messages');
+            const messageElement = document.createElement('div');
+            
+            const time = new Date(messageData.timestamp).toLocaleTimeString();
+            const messageClass = messageData.type === 'sent' ? 'message-sent' : 'message-received';
+            
+            messageElement.className = `message ${messageClass}`;
+            messageElement.innerHTML = `
+                <strong>用户 ${messageData.from || '我'}</strong> (${time})<br>
+                ${escapeHtml(messageData.content)}
+            `;
+            
+            messagesContainer.appendChild(messageElement);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        function addSystemMessage(content) {
+            const messagesContainer = document.getElementById('messages');
+            const messageElement = document.createElement('div');
+            
+            messageElement.className = 'message message-system';
+            messageElement.innerHTML = `${escapeHtml(content)} (${new Date().toLocaleTimeString()})`;
+            
+            messagesContainer.appendChild(messageElement);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        function updateOnlineUsers(users) {
+            const usersContainer = document.getElementById('online-users');
+            if (!users || users.length === 0) {
+                usersContainer.innerHTML = '暂无在线用户';
+                return;
+            }
+            
+            let html = `在线用户 (${users.length}人):<br>`;
+            users.forEach(user => {
+                html += `<div onclick="selectUser(${user.user_id})" style="cursor:pointer; padding:2px; margin:2px; background:#f0f0f0;">
+                    用户 ${user.username} (ID: ${user.user_id})
+                </div>`;
+            });
+            
+            usersContainer.innerHTML = html;
+        }
+
+        function selectUser(userId) {
+            document.getElementById('target-user').value = userId;
+        }
+
+        function updateUI() {
+            const connectBtn = document.getElementById('connect-btn');
+            const disconnectBtn = document.getElementById('disconnect-btn');
+            const messageInput = document.getElementById('message-input');
+            const sendBtn = document.getElementById('send-btn');
+            const status = document.getElementById('status');
+            
+            connectBtn.disabled = isConnected;
+            disconnectBtn.disabled = !isConnected;
+            messageInput.disabled = !isConnected;
+            sendBtn.disabled = !isConnected;
+            
+            if (isConnected) {
+                status.textContent = `已连接 - ${username} (ID: ${userID})`;
+                status.className = 'status connected';
+            } else {
+                status.textContent = '未连接';
+                status.className = 'status disconnected';
+                document.getElementById('online-users').innerHTML = '未连接';
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // 回车发送消息
+        document.getElementById('message-input').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+    </script>
+</body>
+</html>
