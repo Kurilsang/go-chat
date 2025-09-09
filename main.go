@@ -37,6 +37,11 @@ func main() {
 	db := model.GetDB()
 	if db != nil {
 		fmt.Println("MySQL: 已连接")
+
+		// 执行数据库迁移
+		fmt.Println("正在执行数据库迁移...")
+		model.Migration()
+
 		demoUserModel()
 	} else {
 		fmt.Println("MySQL: 未连接")

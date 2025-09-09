@@ -15,13 +15,16 @@ func Migration() {
 		return
 	}
 
-	// 自动迁移模式
-	err := db.AutoMigrate(&User{})
-	if err != nil {
-		logrus.Error("数据库迁移失败:", err)
+	logrus.Info("开始执行数据库迁移...")
+
+	// 自动迁移User表
+	if err := db.AutoMigrate(&User{}).Error; err != nil {
+		logrus.Errorf("User表迁移失败: %v", err)
 		return
 	}
-	logrus.Info("数据库表迁移完成")
+
+	logrus.Info("✅ User表迁移完成")
+	logrus.Info("🎉 数据库迁移全部完成")
 }
 
 // GetDB 获取数据库连接 (保持向后兼容性)
